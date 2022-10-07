@@ -50,7 +50,7 @@ void shift_left_ssse3(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *pubOutpu
         _mm_storeu_si128((__m128i *)&pubOutput[i], x);
 
         // Increment index
-        i += sizeof(__m128i);
+        i += n_step;
     }
 
     if(!r)
@@ -126,7 +126,7 @@ void shift_right_ssse3(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *pubOutp
         }
 
         // Increment index
-        i += sizeof(__m128i);
+        i += n_step;
     }
 
     if(!r)
@@ -197,16 +197,10 @@ void manchester_encode_ssse3(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *p
     while(i < n)
     {
         // Load 64-bits of the message from memory into the LSB of every 16-bit word
-        __m128i x = _mm_set_epi16(
-            pubInput[i + n_step - 1],
-            pubInput[i + n_step - 2],
-            pubInput[i + n_step - 3],
-            pubInput[i + n_step - 4],
-            pubInput[i + n_step - 5],
-            pubInput[i + n_step - 6],
-            pubInput[i + n_step - 7],
-            pubInput[i + n_step - 8]
-        );
+        __m128i x = _mm_loadu_si64(&pubInput[i]);
+
+        // Place each byte at the LSB of a 16-bit word
+        x = _mm_unpacklo_epi8(x, _mm_setzero_si128());
 
         // Clever algorithm to bit-interleave the original message with zeros
         // Credits: https://lemire.me/blog/2018/01/09/how-fast-can-you-bit-interleave-32-bit-integers-simd-edition/
@@ -237,7 +231,7 @@ void manchester_encode_ssse3(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *p
         _mm_storeu_si128((__m128i *)&pubOutput[i << 1], out);
 
         // Increment index
-        i += sizeof(__m128i) / 2;
+        i += n_step;
     }
 
     if(!r)
@@ -248,16 +242,9 @@ void manchester_encode_ssse3(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *p
 
     memcpy(r_d, &pubInput[i], r);
 
-    __m128i x = _mm_set_epi16(
-        r_d[n_step - 1],
-        r_d[n_step - 2],
-        r_d[n_step - 3],
-        r_d[n_step - 4],
-        r_d[n_step - 5],
-        r_d[n_step - 6],
-        r_d[n_step - 7],
-        r_d[n_step - 8]
-    );
+    __m128i x = _mm_loadu_si64(r_d);
+
+    x = _mm_unpacklo_epi8(x, _mm_setzero_si128());
 
     x = _mm_xor_si128(x, _mm_slli_epi16(x, 4));
     x = _mm_and_si128(x, m_quad);
@@ -351,14 +338,14 @@ int32_t manchester_weight_ssse3(uint8_t *pubInput, uint32_t ulInputSize)
         w = _mm_add_epi32(w, _mm_unpackhi_epi64(w, _mm_setzero_si128()));
 
         // Accumulate and subtract bias
-        lWeight += _mm_cvtsi128_si32(w) - sizeof(__m128i) * 4;
+        lWeight += _mm_cvtsi128_si32(w);
 
         // Increment index
-        i += sizeof(__m128i);
+        i += n_step;
     }
 
     if(!r)
-        return lWeight;
+        return lWeight - ulInputSize * 4;
 
     // Remainder
     uint8_t r_d[sizeof(__m128i)];
@@ -386,9 +373,9 @@ int32_t manchester_weight_ssse3(uint8_t *pubInput, uint32_t ulInputSize)
     __m128i w = _mm_sad_epu8(_mm_add_epi8(x_wl, x_wh), _mm_setzero_si128());
     w = _mm_add_epi32(w, _mm_unpackhi_epi64(w, _mm_setzero_si128()));
 
-    lWeight += _mm_cvtsi128_si32(w) - r * 4;
+    lWeight += _mm_cvtsi128_si32(w);
 
-    return lWeight;
+    return lWeight - ulInputSize * 4;
 }
 
 void manchester_decode(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *pubOutput, uint8_t *pubAligned)
@@ -492,10 +479,10 @@ void manchester_decode_ssse3(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *p
         __m128i out = _mm_shuffle_epi8(x, m_pick);
 
         // Store result
-        *(uint64_t *)&pubOutput[i >> 1] = *(uint64_t *)&out;
+        _mm_storeu_si64(&pubOutput[i >> 1], out);
 
         // Increment index
-        i += sizeof(__m128i);
+        i += n_step;
     }
 
     if(!r)
@@ -526,7 +513,7 @@ void manchester_decode_ssse3(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *p
 
     __m128i out = _mm_shuffle_epi8(x, m_pick);
 
-    *(uint64_t *)&r_d = *(uint64_t *)&out;
+    _mm_storeu_si64(r_d, out);
 
     memcpy(&pubOutput[i >> 1], r_d, r >> 1);
 
