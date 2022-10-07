@@ -337,7 +337,7 @@ int32_t manchester_weight_ssse3(uint8_t *pubInput, uint32_t ulInputSize)
         __m128i w = _mm_sad_epu8(_mm_add_epi8(x_wl, x_wh), _mm_setzero_si128());
         w = _mm_add_epi32(w, _mm_unpackhi_epi64(w, _mm_setzero_si128()));
 
-        // Accumulate and subtract bias
+        // Accumulate
         lWeight += _mm_cvtsi128_si32(w);
 
         // Increment index
@@ -345,7 +345,7 @@ int32_t manchester_weight_ssse3(uint8_t *pubInput, uint32_t ulInputSize)
     }
 
     if(!r)
-        return lWeight - ulInputSize * 4;
+        return lWeight - ulInputSize * 4; // Subtract bias
 
     // Remainder
     uint8_t r_d[sizeof(__m128i)];
@@ -417,7 +417,7 @@ void manchester_decode(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *pubOutp
     }
 
     if(pubCorrect == pubInputShifted)
-        pubOutput[ulInputSize - 1] &= 0xFC;
+        pubOutput[(ulInputSize >> 1) - 1] &= 0xFE;
 
     free(pubInputShifted);
 }
@@ -488,7 +488,7 @@ void manchester_decode_ssse3(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *p
     if(!r)
     {
         if(pubCorrect == pubInputShifted)
-            pubOutput[ulInputSize - 1] &= 0xFC;
+            pubOutput[(ulInputSize >> 1) - 1] &= 0xFE;
 
         free(pubInputShifted);
 
@@ -518,7 +518,7 @@ void manchester_decode_ssse3(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *p
     memcpy(&pubOutput[i >> 1], r_d, r >> 1);
 
     if(pubCorrect == pubInputShifted)
-        pubOutput[ulInputSize - 1] &= 0xFC;
+        pubOutput[(ulInputSize >> 1) - 1] &= 0xFE;
 
     free(pubInputShifted);
 }

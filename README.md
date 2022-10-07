@@ -10,20 +10,20 @@ First hands-on experience with x86 SIMD instructions.
 
 Result (on my machine):
 
-    x                       - [F1 D3 77 7B 0F DA 00 E2 00 01 ]
-    x_man                   - [55 A9 59 A5 95 95 95 65 AA 55 59 66 AA AA 56 A6 AA AA AA A9 ]
-    Soft Manchester encode: 2372.445 ms (1810.355 Mbps)
-    x_man_ssse3             - [55 A9 59 A5 95 95 95 65 AA 55 59 66 AA AA 56 A6 AA AA AA A9 ]
-    SSSE3 Manchester encode: 206.698 ms (20778.949 Mbps)
-    x_man_s                 - [AB 52 B3 4B 2B 2B 2A CB 54 AA B2 CD 55 54 AD 4D 55 55 55 53 ]
-    x_dec (1)               - [F1 D3 77 7B 0F DA 00 E2 00 01 ]
-    Soft Manchester decode (non-shifted): 15019.063 ms (285.968 Mbps)
-    x_dec_ssse3 (1)         - [F1 D3 77 7B 0F DA 00 E2 00 01 ]
-    SSSE3 Manchester decode (non-shifted): 1787.019 ms (2403.426 Mbps)
-    x_dec_s (0)             - [71 D3 77 7B 0F DA 00 E2 00 01 ]
-    Soft Manchester decode (shifted): 14659.830 ms (292.975 Mbps)
-    x_dec_s_ssse3 (0)       - [71 D3 77 7B 0F DA 00 E2 00 01 ]
-    SSSE3 Manchester decode (shifted): 1802.683 ms (2382.542 Mbps)
+    x                       - [EC 89 53 62 B9 5F 8C 68 29 34 ]
+    x_man                   - [56 5A 6A 69 99 A5 96 A6 65 69 99 55 6A 5A 96 6A A6 69 A5 9A ]
+    Soft Manchester encode: 2364.924 ms (1816.112 Mbps)
+    x_man_ssse3             - [56 5A 6A 69 99 A5 96 A6 65 69 99 55 6A 5A 96 6A A6 69 A5 9A ]
+    SSSE3 Manchester encode: 207.630 ms (20685.678 Mbps)
+    x_man_s                 - [AC B4 D4 D3 33 4B 2D 4C CA D3 32 AA D4 B5 2C D5 4C D3 4B 34 ]
+    x_dec (1)               - [EC 89 53 62 B9 5F 8C 68 29 34 ]
+    Soft Manchester decode (non-shifted): 14842.458 ms (289.370 Mbps)
+    x_dec_ssse3 (1)         - [EC 89 53 62 B9 5F 8C 68 29 34 ]
+    SSSE3 Manchester decode (non-shifted): 1766.913 ms (2430.775 Mbps)
+    x_dec_s (0)             - [6C 89 53 62 B9 5F 8C 68 29 34 ]
+    Soft Manchester decode (shifted): 14594.166 ms (294.293 Mbps)
+    x_dec_s_ssse3 (0)       - [6C 89 53 62 B9 5F 8C 68 29 34 ]
+    SSSE3 Manchester decode (shifted): 1764.904 ms (2433.542 Mbps)
 
 Note: `x_dec_s` and `x_dec_s_ssse3`'s first byte does not match `x`, but this result is expected, since the first bit is 1 and the message got shifted 1 bit to the left, the first bit is lost. Although the decoder is able to figure out that the bitstream is not aligned and correct it, it is not capable of recovering the "lost" bit.
 
