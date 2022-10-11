@@ -10,7 +10,7 @@
 void shift_left(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *pubOutput)
 {
     for(uint32_t i = 0; i < ulInputSize; i++)
-        pubOutput[i] = pubInput[i] << 1 | (i == (ulInputSize - 1) ? 0 : (pubInput[i + 1] >> 7));
+        pubOutput[i] = (pubInput[i] << 1) | (i == (ulInputSize - 1) ? 0 : (pubInput[i + 1] >> 7));
 }
 void shift_left_ssse3(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *pubOutput)
 {
@@ -83,6 +83,7 @@ void shift_left_ssse3(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *pubOutpu
 
     memcpy(&pubOutput[i], r_d, r);
 }
+
 void shift_right(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *pubOutput)
 {
     for(uint32_t i = 0; i < ulInputSize; i++)
@@ -283,22 +284,40 @@ void manchester_encode_def(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *pub
     }
 }
 
-int32_t manchester_weight(uint8_t *pubInput, uint32_t ulInputSize)
+uint8_t manchester_sync(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *pubOutput)
 {
-    int32_t lWeight = 0;
+    int64_t llWeight = 0;
+    int64_t llWeightS = 0;
 
     for(uint32_t i = 0; i < ulInputSize; i++)
-        for(uint8_t j = 8; j > 0; j -= 2)
-            if(((pubInput[i] >> (j - 1)) ^ (pubInput[i] >> (j - 2))) & 1)
-                lWeight++;
-            else
-                lWeight--;
+    {
+        uint8_t ubData = pubInput[i];
+        uint8_t ubDataS1 = (ubData << 1) | (i == (ulInputSize - 1) ? 0 : (pubInput[i + 1] >> 7));
+        uint8_t ubDataS2 = ubDataS1 << 1;
 
-    return lWeight;
+        pubOutput[i] = ubDataS1;
+
+        for(uint8_t j = 8; j > 0; j -= 2)
+        {
+            if(((ubData >> (j - 1)) ^ (ubDataS1 >> (j - 1))) & 1)
+                llWeight++;
+            else
+                llWeight--;
+
+            if(((ubDataS1 >> (j - 1)) ^ (ubDataS2 >> (j - 1))) & 1)
+                llWeightS++;
+            else
+                llWeightS--;
+        }
+    }
+
+    return llWeight >= llWeightS;
 }
-int32_t manchester_weight_ssse3(uint8_t *pubInput, uint32_t ulInputSize)
+uint8_t manchester_sync_ssse3(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *pubOutput)
 {
-    const __m128i m_corr_lut = _mm_set_epi8(4, 4, 2, 2, 4, 4, 2, 2, 2, 2, 0, 0, 2, 2, 0, 0);
+    const __m128i m_swap = _mm_set_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+    const __m128i m_carry = _mm_set_epi64x(0, 1);
+    const __m128i m_corr_lut = _mm_set_epi8(0, 0, 0, 0, 0, 4, 0, 2, 0, 0, 0, 0, 0, 2, 0, 0);
     const __m128i m_mask_l_odds = _mm_set1_epi8(0x0A);
 
     const size_t n_step = sizeof(__m128i);
@@ -306,12 +325,16 @@ int32_t manchester_weight_ssse3(uint8_t *pubInput, uint32_t ulInputSize)
     uint32_t n = ulInputSize & ~(n_step - 1);
     uint8_t r = ulInputSize & (n_step - 1);
     uint32_t i = 0;
-    int32_t lWeight = 0;
+    uint64_t ullWeight = 0;
+    uint64_t ullWeightS = 0;
 
     while(i < n)
     {
         // Load 128-bits of the message from memory
         __m128i x = _mm_lddqu_si128((const __m128i *)&pubInput[i]);
+
+        // Swap endianness
+        x = _mm_shuffle_epi8(x, m_swap);
 
         // Shift left by 1 bit to align for XOR
         __m128i y = _mm_slli_epi64(x, 1);
@@ -319,33 +342,62 @@ int32_t manchester_weight_ssse3(uint8_t *pubInput, uint32_t ulInputSize)
         y1 = _mm_srli_epi64(y1, 63);
         y = _mm_or_si128(y, y1);
 
+        // Carry
+        if(ulInputSize > i + n_step)
+        {
+            if(pubInput[i + n_step] & 0x80)
+                y = _mm_or_si128(y, m_carry);
+        }
+
+        // Extract first shifted version
+        //// Swap endianness
+        y1 = _mm_shuffle_epi8(y, m_swap);
+
+        //// Store result
+        _mm_storeu_si128((__m128i *)&pubOutput[i], y1);
+
+        // Shift left again
+        __m128i z = _mm_slli_epi64(y, 1);
+        __m128i z1 = _mm_slli_si128(y, 8);
+        z1 = _mm_srli_epi64(z1, 63);
+        z = _mm_or_si128(z, z1);
+
         // XOR all bits
         x = _mm_xor_si128(x, y);
+        y = _mm_xor_si128(y, z);
 
         // Mask odd bits of the lower nibble
         __m128i x_l = _mm_and_si128(x, m_mask_l_odds);
+        __m128i y_l = _mm_and_si128(y, m_mask_l_odds);
 
         // Apply LUT to calculate the weight per nibble (lower)
         __m128i x_wl = _mm_shuffle_epi8(m_corr_lut, x_l);
+        __m128i y_wl = _mm_shuffle_epi8(m_corr_lut, y_l);
 
         // Shift right 4 bits and repeat for the upper nibble
         x = _mm_srli_epi16(x, 4);
         __m128i x_h = _mm_and_si128(x, m_mask_l_odds);
         __m128i x_wh = _mm_shuffle_epi8(m_corr_lut, x_h);
+        y = _mm_srli_epi16(y, 4);
+        __m128i y_h = _mm_and_si128(y, m_mask_l_odds);
+        __m128i y_wh = _mm_shuffle_epi8(m_corr_lut, y_h);
 
         // Add together and add horizontally
-        __m128i w = _mm_sad_epu8(_mm_add_epi8(x_wl, x_wh), _mm_setzero_si128());
-        w = _mm_add_epi32(w, _mm_unpackhi_epi64(w, _mm_setzero_si128()));
+        __m128i x_w = _mm_sad_epu8(_mm_add_epi8(x_wl, x_wh), _mm_setzero_si128());
+        x_w = _mm_add_epi32(x_w, _mm_unpackhi_epi64(x_w, _mm_setzero_si128()));
+        __m128i y_w = _mm_sad_epu8(_mm_add_epi8(y_wl, y_wh), _mm_setzero_si128());
+        y_w = _mm_add_epi32(y_w, _mm_unpackhi_epi64(y_w, _mm_setzero_si128()));
 
-        // Accumulate
-        lWeight += _mm_cvtsi128_si32(w);
+        // Accumulate and subtract bias
+        ullWeight += _mm_cvtsi128_si32(x_w);
+        ullWeightS += _mm_cvtsi128_si32(y_w);
 
         // Increment index
         i += n_step;
     }
 
     if(!r)
-        return lWeight - ulInputSize * 4; // Subtract bias
+        return ullWeight >= ullWeightS;
 
     // Remainder
     uint8_t r_d[sizeof(__m128i)];
@@ -355,41 +407,57 @@ int32_t manchester_weight_ssse3(uint8_t *pubInput, uint32_t ulInputSize)
 
     __m128i x = _mm_lddqu_si128((const __m128i *)r_d);
 
+    x = _mm_shuffle_epi8(x, m_swap);
+
     __m128i y = _mm_slli_epi64(x, 1);
     __m128i y1 = _mm_slli_si128(x, 8);
     y1 = _mm_srli_epi64(y1, 63);
     y = _mm_or_si128(y, y1);
 
+    y1 = _mm_shuffle_epi8(y, m_swap);
+
+    _mm_storeu_si128((__m128i *)r_d, y1);
+
+    memcpy(&pubOutput[i], r_d, r);
+
+    __m128i z = _mm_slli_epi64(y, 1);
+    __m128i z1 = _mm_slli_si128(y, 8);
+    z1 = _mm_srli_epi64(z1, 63);
+    z = _mm_or_si128(z, z1);
+
     x = _mm_xor_si128(x, y);
+    y = _mm_xor_si128(y, z);
 
     __m128i x_l = _mm_and_si128(x, m_mask_l_odds);
+    __m128i y_l = _mm_and_si128(y, m_mask_l_odds);
 
     __m128i x_wl = _mm_shuffle_epi8(m_corr_lut, x_l);
+    __m128i y_wl = _mm_shuffle_epi8(m_corr_lut, y_l);
 
     x = _mm_srli_epi16(x, 4);
     __m128i x_h = _mm_and_si128(x, m_mask_l_odds);
     __m128i x_wh = _mm_shuffle_epi8(m_corr_lut, x_h);
+    y = _mm_srli_epi16(y, 4);
+    __m128i y_h = _mm_and_si128(y, m_mask_l_odds);
+    __m128i y_wh = _mm_shuffle_epi8(m_corr_lut, y_h);
 
-    __m128i w = _mm_sad_epu8(_mm_add_epi8(x_wl, x_wh), _mm_setzero_si128());
-    w = _mm_add_epi32(w, _mm_unpackhi_epi64(w, _mm_setzero_si128()));
+    __m128i x_w = _mm_sad_epu8(_mm_add_epi8(x_wl, x_wh), _mm_setzero_si128());
+    x_w = _mm_add_epi32(x_w, _mm_unpackhi_epi64(x_w, _mm_setzero_si128()));
+    __m128i y_w = _mm_sad_epu8(_mm_add_epi8(y_wl, y_wh), _mm_setzero_si128());
+    y_w = _mm_add_epi32(y_w, _mm_unpackhi_epi64(y_w, _mm_setzero_si128()));
 
-    lWeight += _mm_cvtsi128_si32(w);
+    ullWeight += _mm_cvtsi128_si32(x_w);
+    ullWeightS += _mm_cvtsi128_si32(y_w);
 
-    return lWeight - ulInputSize * 4;
+    return ullWeight >= ullWeightS;
 }
 
 void manchester_decode(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *pubOutput, uint8_t *pubAligned)
 {
     uint8_t *pubInputShifted = (uint8_t *)malloc(ulInputSize);
-
-    shift_left(pubInput, ulInputSize, pubInputShifted);
-
-    int32_t lWeight = manchester_weight(pubInput, ulInputSize);
-    int32_t lWeightShifted = manchester_weight(pubInputShifted, ulInputSize);
-
     uint8_t *pubCorrect = NULL;
 
-    if(lWeight >= lWeightShifted)
+    if(manchester_sync(pubInput, ulInputSize, pubInputShifted))
     {
         if(pubAligned)
             *pubAligned = 1;
@@ -424,15 +492,9 @@ void manchester_decode(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *pubOutp
 void manchester_decode_ssse3(uint8_t *pubInput, uint32_t ulInputSize, uint8_t *pubOutput, uint8_t *pubAligned)
 {
     uint8_t *pubInputShifted = (uint8_t *)malloc(ulInputSize);
-
-    shift_left_ssse3(pubInput, ulInputSize, pubInputShifted);
-
-    int32_t lWeight = manchester_weight_ssse3(pubInput, ulInputSize);
-    int32_t lWeightShifted = manchester_weight_ssse3(pubInputShifted, ulInputSize);
-
     uint8_t *pubCorrect = NULL;
 
-    if(lWeight >= lWeightShifted)
+    if(manchester_sync_ssse3(pubInput, ulInputSize, pubInputShifted))
     {
         if(pubAligned)
             *pubAligned = 1;
@@ -533,10 +595,14 @@ int main(int argc, char *argv[])
     //uint8_t x[10] = {0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0xBC};
     uint8_t *x = malloc(x_sz);
     uint8_t *x_man = malloc(2 * x_sz);
+    uint8_t *x_man_sse = malloc(2 * x_sz);
     uint8_t *x_man_s = malloc(2 * x_sz);
     uint8_t *x_dec = malloc(x_sz);
+    uint8_t *x_dec_sse = malloc(x_sz);
     uint8_t *x_dec_s = malloc(x_sz);
+    uint8_t *x_dec_s_sse = malloc(x_sz);
     uint8_t x_aligned;
+    uint8_t pass = 1;
     double elapsed_time;
     clock_t start_time;
 
@@ -547,6 +613,9 @@ int main(int argc, char *argv[])
     printf("x\t\t\t- [");
     for(size_t i = 0; i < MIN(x_sz, 10); i++)
         printf("%02X ", x[i]);
+    printf("... ");
+    for(size_t i = MIN(x_sz, 10); i > 0; i--)
+        printf("%02X ", x[x_sz - i]);
     printf("]\r\n");
 
     start_time = clock();
@@ -554,29 +623,50 @@ int main(int argc, char *argv[])
     elapsed_time = (double)(clock() - start_time) / CLOCKS_PER_SEC;
 
     printf("x_man\t\t\t- [");
-    for(size_t i = 0; i < MIN(2*x_sz, 20); i++)
+    for(size_t i = 0; i < MIN(2*x_sz, 10); i++)
         printf("%02X ", x_man[i]);
+    printf("... ");
+    for(size_t i = MIN(2*x_sz, 10); i > 0; i--)
+        printf("%02X ", x_man[x_sz - i]);
     printf("]\r\n");
 
     printf("Soft Manchester encode: %.3f ms (%.3f Mbps)\r\n", elapsed_time * 1000.0, x_sz * 8 / elapsed_time / 1e6);
 
-    memset(x_man, 0, 2*x_sz);
+    memset(x_man_sse, 0, 2*x_sz);
     start_time = clock();
-    manchester_encode_ssse3(x, x_sz, x_man);
+    manchester_encode_ssse3(x, x_sz, x_man_sse);
     elapsed_time = (double)(clock() - start_time) / CLOCKS_PER_SEC;
 
     printf("x_man_ssse3\t\t- [");
-    for(size_t i = 0; i < MIN(2*x_sz, 20); i++)
-        printf("%02X ", x_man[i]);
+    for(size_t i = 0; i < MIN(2*x_sz, 10); i++)
+        printf("%02X ", x_man_sse[i]);
+    printf("... ");
+    for(size_t i = MIN(2*x_sz, 10); i > 0; i--)
+        printf("%02X ", x_man_sse[x_sz - i]);
     printf("]\r\n");
 
     printf("SSSE3 Manchester encode: %.3f ms (%.3f Mbps)\r\n", elapsed_time * 1000.0, x_sz * 8 / elapsed_time / 1e6);
 
+    for(size_t i = 0; i < 2*x_sz; i++)
+    {
+        if(x_man_sse[i] != x_man[i])
+        {
+            pass = 0;
+
+            break;
+        }
+    }
+
+    printf("Manchester encode - SSSE3 vs Soft: %s\r\n", pass ? "PASSED" : "FAILED !!!!!!!!!!");
+
     shift_left(x_man, 2*x_sz, x_man_s);
 
     printf("x_man_s\t\t\t- [");
-    for(size_t i = 0; i < MIN(2*x_sz, 20); i++)
+    for(size_t i = 0; i < MIN(2*x_sz, 10); i++)
         printf("%02X ", x_man_s[i]);
+    printf("... ");
+    for(size_t i = MIN(2*x_sz, 10); i > 0; i--)
+        printf("%02X ", x_man_s[x_sz - i]);
     printf("]\r\n");
 
     x_aligned = 0;
@@ -588,23 +678,42 @@ int main(int argc, char *argv[])
     printf("x_dec (%hhu)\t\t- [", x_aligned);
     for(size_t i = 0; i < MIN(x_sz, 10); i++)
         printf("%02X ", x_dec[i]);
+    printf("... ");
+    for(size_t i = MIN(x_sz, 10); i > 0; i--)
+        printf("%02X ", x_dec[x_sz - i]);
     printf("]\r\n");
 
     printf("Soft Manchester decode (non-shifted): %.3f ms (%.3f Mbps)\r\n", elapsed_time * 1000.0, x_sz * 8 / elapsed_time / 1e6);
 
     x_aligned = 0;
 
-    memset(x_dec, 0, x_sz);
+    memset(x_dec_sse, 0, x_sz);
     start_time = clock();
-    manchester_decode_ssse3(x_man, 2*x_sz, x_dec, &x_aligned);
+    manchester_decode_ssse3(x_man, 2*x_sz, x_dec_sse, &x_aligned);
     elapsed_time = (double)(clock() - start_time) / CLOCKS_PER_SEC;
 
     printf("x_dec_ssse3 (%hhu)\t\t- [", x_aligned);
     for(size_t i = 0; i < MIN(x_sz, 10); i++)
-        printf("%02X ", x_dec[i]);
+        printf("%02X ", x_dec_sse[i]);
+    printf("... ");
+    for(size_t i = MIN(x_sz, 10); i > 0; i--)
+        printf("%02X ", x_dec_sse[x_sz - i]);
     printf("]\r\n");
 
     printf("SSSE3 Manchester decode (non-shifted): %.3f ms (%.3f Mbps)\r\n", elapsed_time * 1000.0, x_sz * 8 / elapsed_time / 1e6);
+
+    pass = 1;
+    for(size_t i = 0; i < x_sz; i++)
+    {
+        if(x_dec_sse[i] != x_dec[i])
+        {
+            pass = 0;
+
+            break;
+        }
+    }
+
+    printf("Manchester decode (non-shifted) - SSSE3 vs Soft: %s\r\n", pass ? "PASSED" : "FAILED !!!!!!!!!!");
 
     x_aligned = 0;
 
@@ -618,6 +727,9 @@ int main(int argc, char *argv[])
     printf("x_dec_s (%hhu)\t\t- [", x_aligned);
     for(size_t i = 0; i < MIN(x_sz, 10); i++)
         printf("%02X ", x_dec_s[i]);
+    printf("... ");
+    for(size_t i = MIN(x_sz, 10); i > 0; i--)
+        printf("%02X ", x_dec_s[x_sz - i]);
     printf("]\r\n");
 
     printf("Soft Manchester decode (shifted): %.3f ms (%.3f Mbps)\r\n", elapsed_time * 1000.0, x_sz * 8 / elapsed_time / 1e6);
@@ -629,14 +741,30 @@ int main(int argc, char *argv[])
     manchester_decode_ssse3(x_man_s, 2*x_sz, x_dec, &x_aligned);
     elapsed_time = (double)(clock() - start_time) / CLOCKS_PER_SEC;
 
-    shift_right(x_dec, x_sz, x_dec_s);
+    shift_right(x_dec, x_sz, x_dec_s_sse);
 
     printf("x_dec_s_ssse3 (%hhu)\t- [", x_aligned);
     for(size_t i = 0; i < MIN(x_sz, 10); i++)
-        printf("%02X ", x_dec_s[i]);
+        printf("%02X ", x_dec_s_sse[i]);
+    printf("... ");
+    for(size_t i = MIN(x_sz, 10); i > 0; i--)
+        printf("%02X ", x_dec_s_sse[x_sz - i]);
     printf("]\r\n");
 
     printf("SSSE3 Manchester decode (shifted): %.3f ms (%.3f Mbps)\r\n", elapsed_time * 1000.0, x_sz * 8 / elapsed_time / 1e6);
+
+    pass = 1;
+    for(size_t i = 0; i < x_sz; i++)
+    {
+        if(x_dec_s_sse[i] != x_dec_s[i])
+        {
+            pass = 0;
+
+            break;
+        }
+    }
+
+    printf("Manchester decode (shifted) - SSSE3 vs Soft: %s\r\n", pass ? "PASSED" : "FAILED !!!!!!!!!!");
 
     return 0;
 }

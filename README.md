@@ -10,20 +10,23 @@ First hands-on experience with x86 SIMD instructions.
 
 Result (on my machine):
 
-    x                       - [EC 89 53 62 B9 5F 8C 68 29 34 ]
-    x_man                   - [56 5A 6A 69 99 A5 96 A6 65 69 99 55 6A 5A 96 6A A6 69 A5 9A ]
-    Soft Manchester encode: 2364.924 ms (1816.112 Mbps)
-    x_man_ssse3             - [56 5A 6A 69 99 A5 96 A6 65 69 99 55 6A 5A 96 6A A6 69 A5 9A ]
-    SSSE3 Manchester encode: 207.630 ms (20685.678 Mbps)
-    x_man_s                 - [AC B4 D4 D3 33 4B 2D 4C CA D3 32 AA D4 B5 2C D5 4C D3 4B 34 ]
-    x_dec (1)               - [EC 89 53 62 B9 5F 8C 68 29 34 ]
-    Soft Manchester decode (non-shifted): 14842.458 ms (289.370 Mbps)
-    x_dec_ssse3 (1)         - [EC 89 53 62 B9 5F 8C 68 29 34 ]
-    SSSE3 Manchester decode (non-shifted): 1766.913 ms (2430.775 Mbps)
-    x_dec_s (0)             - [6C 89 53 62 B9 5F 8C 68 29 34 ]
-    Soft Manchester decode (shifted): 14594.166 ms (294.293 Mbps)
-    x_dec_s_ssse3 (0)       - [6C 89 53 62 B9 5F 8C 68 29 34 ]
-    SSSE3 Manchester decode (shifted): 1764.904 ms (2433.542 Mbps)
+    x                       - [BE 87 FA 13 2C 56 2D 7E 86 1D ... 27 90 B3 2F DB BD 14 3F 6E CC ]
+    x_man                   - [65 56 6A 95 55 66 A9 A5 A6 5A ... AA 5A 9A 99 A6 5A 59 A6 95 96 ]
+    Soft Manchester encode: 2350.273 ms (1827.433 Mbps)
+    x_man_ssse3             - [65 56 6A 95 55 66 A9 A5 A6 5A ... AA 5A 9A 99 A6 5A 59 A6 95 96 ]
+    SSSE3 Manchester encode: 210.345 ms (20418.680 Mbps)
+    Manchester encode - SSSE3 vs Soft: PASSED
+    x_man_s                 - [CA AC D5 2A AA CD 53 4B 4C B5 ... 54 B5 35 33 4C B4 B3 4D 2B 2D ]
+    x_dec (1)               - [BE 87 FA 13 2C 56 2D 7E 86 1D ... 27 90 B3 2F DB BD 14 3F 6E CC ]
+    Soft Manchester decode (non-shifted): 13650.048 ms (314.649 Mbps)
+    x_dec_ssse3 (1)         - [BE 87 FA 13 2C 56 2D 7E 86 1D ... 27 90 B3 2F DB BD 14 3F 6E CC ]
+    SSSE3 Manchester decode (non-shifted): 1609.608 ms (2668.331 Mbps)
+    Manchester decode (non-shifted) - SSSE3 vs Soft: PASSED
+    x_dec_s (0)             - [3E 87 FA 13 2C 56 2D 7E 86 1D ... 27 90 B3 2F DB BD 14 3F 6E CC ]
+    Soft Manchester decode (shifted): 13443.886 ms (319.474 Mbps)
+    x_dec_s_ssse3 (0)       - [3E 87 FA 13 2C 56 2D 7E 86 1D ... 27 90 B3 2F DB BD 14 3F 6E CC ]
+    SSSE3 Manchester decode (shifted): 1614.709 ms (2659.902 Mbps)
+    Manchester decode (shifted) - SSSE3 vs Soft: PASSED
 
 Note: `x_dec_s` and `x_dec_s_ssse3`'s first byte does not match `x`, but this result is expected, since the first bit is 1 and the message got shifted 1 bit to the left, the first bit is lost. Although the decoder is able to figure out that the bitstream is not aligned and correct it, it is not capable of recovering the "lost" bit.
 
